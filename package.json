@@ -1,0 +1,46 @@
+{
+  "name": "ocproxy",
+  "version": "1.0.0",
+  "description": "OCProxy — OpenCode Zen free-model relay: multi-format downstream API, fingerprinted OpenAI-compatible upstream, free-only model catalog.",
+  "type": "module",
+  "main": "src/index.ts",
+  "module": "src/index.ts",
+  "bin": {
+    "OCProxy": "bin/ocproxy.mjs",
+    "ocproxy": "bin/ocproxy.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "assets",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
+  "engines": {
+    "bun": ">=1.2.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "opencode",
+    "zen",
+    "openai",
+    "anthropic",
+    "gemini",
+    "relay",
+    "proxy",
+    "bun"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.6.0"
+  }
+}
