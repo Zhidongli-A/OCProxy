@@ -15,10 +15,10 @@ import { readFileSync } from "node:fs";
 import type {
   ChatMessage,
   ChatRequest,
-  Config,
   OpenAITool,
   UpstreamEvent,
 } from "./types.ts";
+import { workingDirectory } from "./environment.ts";
 
 const READ_TOOL_ASSET = new URL("../assets/read-tool.json", import.meta.url);
 
@@ -71,12 +71,9 @@ function contentText(content: ChatMessage["content"]): string {
  * The block is 49 chars and contains no instructions, so it needs no
  * neutralization; the caller's own system prompt follows it untouched.
  */
-export function injectHarnessPreamble(
-  request: ChatRequest,
-  config: Config,
-): void {
+export function injectHarnessPreamble(request: ChatRequest): void {
   if (!Array.isArray(request.messages)) return;
-  const env = buildMinimalEnv(config.workingDirectory);
+  const env = buildMinimalEnv(workingDirectory());
 
   const systemIndex = request.messages.findIndex(
     (message) => message.role === "system",
@@ -232,11 +229,11 @@ export function injectHarnessTools(
 }
 
 /** Full harness preparation: alias tool names + read tool + minimal env block. */
-export function applyHarness(request: ChatRequest, config: Config): ToolBridge {
+export function applyHarness(request: ChatRequest): ToolBridge {
   const callerTools = Array.isArray(request.tools) ? request.tools : [];
   const renames = applyToolAliases(request, callerTools);
   const bridge = injectHarnessTools(request, renames);
-  injectHarnessPreamble(request, config);
+  injectHarnessPreamble(request);
   return bridge;
 }
 

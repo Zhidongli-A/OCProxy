@@ -22,8 +22,25 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import type { ChatMessage, ChatRequest, Config } from "./types.ts";
-import { computeProjectId } from "./environment.ts";
+import type { ChatMessage, ChatRequest } from "./types.ts";
+import { computeProjectId, workingDirectory } from "./environment.ts";
+
+/** OpenCode release whose captured harness + wire format we impersonate. */
+const OPENCODE_VERSION = "2.2.6";
+
+/** Wire identity. Not configurable: it must match the captured client exactly. */
+const USER_AGENT = `opencode/latest/${OPENCODE_VERSION}/cli`;
+const OPENCODE_CLIENT = "cli";
+
+/** Zen's shared, non-secret anonymous key. */
+const PUBLIC_API_KEY = "public";
+
+let projectIdCache: string | undefined;
+
+function projectId(): string {
+  projectIdCache ??= computeProjectId(workingDirectory());
+  return projectIdCache;
+}
 
 const ALPHABET =
   "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -191,34 +208,30 @@ export interface BuildHeadersOptions {
   extraHeaders?: Record<string, string>;
 }
 
-function resolveSession(config: Config, identity?: UpstreamIdentity): string {
-  if (config.sessionAffinity === "off") return generateSessionId();
+function resolveSession(identity?: UpstreamIdentity): string {
   const candidate = identity?.sessionId;
   if (candidate && realSessionID(candidate)) return candidate;
   return generateSessionId();
 }
 
 /**
- * Build the outbound headers exactly as OpenCode 2.2.5 sends them, in its
+ * Build the outbound headers exactly as OpenCode 2.2.6 sends them, in its
  * order, so no extra header marks the request as not-OpenCode traffic.
  */
 export function buildUpstreamHeaders(
-  config: Config,
   options: BuildHeadersOptions = {},
 ): Headers {
   const headers = new Headers();
-  const session = resolveSession(config, options.identity);
+  const session = resolveSession(options.identity);
   const trace = traceHeaders(session);
-  const projectId =
-    config.opencodeProjectId || computeProjectId(config.workingDirectory);
 
-  headers.set("authorization", `Bearer ${config.upstreamApiKey}`);
+  headers.set("authorization", `Bearer ${PUBLIC_API_KEY}`);
   headers.set("content-type", "application/json");
-  headers.set("user-agent", config.userAgent);
+  headers.set("user-agent", USER_AGENT);
   headers.set("b3", trace.b3);
   headers.set("traceparent", trace.traceparent);
-  headers.set("x-opencode-client", config.opencodeClient);
-  headers.set("x-opencode-project", projectId);
+  headers.set("x-opencode-client", OPENCODE_CLIENT);
+  headers.set("x-opencode-project", projectId());
   headers.set("x-opencode-session", session);
   headers.set("x-opencode-session-id", session);
   headers.set("x-session-affinity", session);

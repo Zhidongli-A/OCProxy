@@ -158,42 +158,21 @@ export interface Adapter {
   renderError(status: number, message: string, code?: string): Response;
 }
 
+/**
+ * Runtime configuration. Deliberately small: everything that shapes the wire
+ * identity (User-Agent, x-opencode-*, project id, session ids, trace headers),
+ * the free-only catalog filter, the local token estimate and the single 429
+ * retry is computed by the relay itself and cannot be configured.
+ */
 export interface Config {
   host: string;
   port: number;
   upstreamBaseUrl: string;
   upstreamModelsUrl: string;
-  upstreamApiKey: string;
   /** Optional HTTP CONNECT proxy for upstream requests (e.g. http://127.0.0.1:7890). */
   upstreamProxy?: string;
-  /** OpenCode release impersonated, e.g. "2.2.5". */
-  opencodeVersion: string;
-  userAgent: string;
-  opencodeClient: string;
-  /** Override for sha1("directory:<dir>"); otherwise derived. */
-  opencodeProjectId?: string;
-  /** Directory named in the project id / minimal <env> block. */
-  workingDirectory: string;
-  /** Reject oversized prompts locally before spending upstream quota. */
-  contextGuard: boolean;
-  /** Retry once with a fresh session when upstream answers 429. */
-  retryOn429: boolean;
-  /** Per-model context/input/output corrections (catalog limits can be stale). */
-  contextLimitOverrides: Record<
-    string,
-    { context?: number; input?: number; output?: number }
-  >;
-  /** Max completion tokens added when the caller specified none (OpenCode sends 32000). */
-  defaultMaxCompletionTokens: number;
-  /** Never contact the upstream; useful for offline client testing. */
-  dryRun: boolean;
-  modelCacheTtlMs: number;
-  modelCacheErrorTtlMs: number;
-  freeModelsOnly: boolean;
-  includeUsage: boolean;
+  /** Per-request upstream timeout (ms). */
   requestTimeoutMs: number;
-  extraFreeModels: string[];
-  sessionAffinity: "auto" | "off" | "random";
   logLevel: "debug" | "info" | "warn" | "error";
 }
 

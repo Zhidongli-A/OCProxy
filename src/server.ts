@@ -22,8 +22,8 @@ import type {
 } from "./types.ts";
 import { loadConfig } from "./config.ts";
 import { HttpError } from "./errors.ts";
-import { UpstreamClient, UpstreamError } from "./upstream.ts";
-import { ModelRegistry, normalizeModelId } from "./models.ts";
+import { UpstreamClient, UpstreamError, DEFAULT_MAX_COMPLETION_TOKENS } from "./upstream.ts";
+import { ModelRegistry } from "./models.ts";
 import {
   downstreamIdentity,
   forgetConversationSession,
@@ -90,7 +90,6 @@ export function createApp(options: AppOptions = {}): AppRuntime {
       upstream,
       fetchImpl: options.fetchImpl ?? fetch,
       now: options.now,
-      offline: config.dryRun,
     });
   const now = options.now ?? Date.now;
 
@@ -159,17 +158,17 @@ export function createApp(options: AppOptions = {}): AppRuntime {
       activeRequest = chatRequest;
       modelLabel = chatRequest.model;
 
-      const resolved = await resolveModel(registry, config, chatRequest.model);
+      const resolved = await registry.resolve(chatRequest.model);
       chatRequest.model = resolved.id;
 
       // The free-tier gate requires a minimal <env> block plus a `read` tool.
       // applyHarness also renames gate-refused tool names and installs the
       // response-side tool bridge.
-      const bridge = applyHarness(chatRequest, config);
+      const bridge = applyHarness(chatRequest);
 
       // Reject clearly-oversized prompts before spending the free token bucket
-      // and before the provider answers with a raw 400.
-      if (config.contextGuard) enforceContextBudget(chatRequest, resolved, config);
+      // and before the provider answers with a raw 400. The estimate is local.
+      enforceContextBudget(chatRequest, resolved);
 
       // Reuse a genuine inbound OpenCode session id; otherwise derive one per
       // conversation. A 429 retry always uses a brand-new session.
@@ -190,9 +189,7 @@ export function createApp(options: AppOptions = {}): AppRuntime {
       ]);
 
       const openUpstream = (identity?: { sessionId?: string }) =>
-        config.dryRun
-          ? dryRunEvents()
-          : upstream.streamChat(chatRequest, { signal, identity });
+        upstream.streamChat(chatRequest, { signal, identity });
 
       let events = openUpstream(
         sessionHint ? { sessionId: sessionHint } : undefined,
@@ -206,13 +203,8 @@ export function createApp(options: AppOptions = {}): AppRuntime {
         peeked = await peekEvents(events);
       } catch (error) {
         // A burned session or a transient edge 429 can succeed immediately
-        // with a fresh session; retry once, never in a loop.
-        if (
-          config.retryOn429 &&
-          !config.dryRun &&
-          error instanceof UpstreamError &&
-          error.status === 429
-        ) {
+        // with a fresh session; retry exactly once, never in a loop.
+        if (error instanceof UpstreamError && error.status === 429) {
           forgetConversationSession(chatRequest);
           events = openUpstream({ sessionId: generateSessionId() });
           peeked = await peekEvents(events);
@@ -256,21 +248,6 @@ export function createApp(options: AppOptions = {}): AppRuntime {
   return { config, upstream, models: registry, handler };
 }
 
-/** Synthetic stream used when UPSTREAM_DRY_RUN is on: no network at all. */
-async function* dryRunEvents(): AsyncGenerator<UpstreamEvent> {
-  yield {
-    type: "start",
-    id: "dry-run",
-    model: "dry-run",
-    created: Math.floor(Date.now() / 1000),
-  };
-  yield {
-    type: "text",
-    delta: "[dry-run] upstream request suppressed (UPSTREAM_DRY_RUN=1).",
-  };
-  yield { type: "finish", reason: "stop" };
-}
-
 /**
  * Eagerly advance the upstream iterator by one event so connection-level and
  * HTTP errors surface before the downstream response headers are flushed.
@@ -293,7 +270,7 @@ async function peekEvents(
 }
 
 /** Rough prompt token estimate (~4 chars/token) including preamble and tools. */
-function estimateRequestTokens(request: import("./types.ts").ChatRequest): number {
+function estimateRequestTokens(request: ChatRequest): number {
   let chars = 0;
   for (const message of request.messages ?? []) {
     chars += JSON.stringify(message).length;
@@ -309,15 +286,14 @@ function estimateRequestTokens(request: import("./types.ts").ChatRequest): numbe
  * burning quota or surfacing a raw provider error.
  */
 function enforceContextBudget(
-  request: import("./types.ts").ChatRequest,
+  request: ChatRequest,
   model: ModelInfo,
-  config: Config,
 ): void {
   const promptTokens = estimateRequestTokens(request);
   const outputTokens =
     request.max_completion_tokens ??
     request.max_tokens ??
-    config.defaultMaxCompletionTokens;
+    DEFAULT_MAX_COMPLETION_TOKENS;
 
   const inputLimit = model.inputLength ?? model.contextLength;
   if (inputLimit && promptTokens > inputLimit) {
@@ -338,48 +314,6 @@ function enforceContextBudget(
       "context_length_exceeded",
     );
   }
-}
-
-async function resolveModel(
-  registry: ModelRegistry,
-  config: Config,
-  requested: string,
-): Promise<ModelInfo> {
-  if (config.dryRun) {
-    return {
-      id: normalizeModelId(requested),
-      name: normalizeModelId(requested),
-      created: Math.floor(Date.now() / 1000),
-      ownedBy: "opencode",
-      capabilities: {
-        tools: true,
-        reasoning: true,
-        vision: false,
-        structuredOutput: false,
-      },
-      api: "chat-completions",
-      free: true,
-    };
-  }
-  if (!config.freeModelsOnly) {
-    const existing = await registry.getModel(requested).catch(() => undefined);
-    if (existing) return existing;
-    return {
-      id: normalizeModelId(requested),
-      name: normalizeModelId(requested),
-      created: Math.floor(Date.now() / 1000),
-      ownedBy: "opencode",
-      capabilities: {
-        tools: true,
-        reasoning: true,
-        vision: false,
-        structuredOutput: false,
-      },
-      api: "chat-completions",
-      free: true,
-    };
-  }
-  return registry.resolve(requested);
 }
 
 type Route =

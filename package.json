@@ -1,6 +1,6 @@
 {
   "name": "ocproxy",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "OCProxy — OpenCode Zen free-model relay: multi-format downstream API, fingerprinted OpenAI-compatible upstream, free-only model catalog.",
   "type": "module",
   "main": "src/index.ts",

@@ -62,15 +62,22 @@ const FORWARDABLE_FIELDS = [
   "user",
 ] as const;
 
+/**
+ * OpenCode always sends a real completion budget (32000 by default), so the
+ * relay fills it in when the caller leaves both limits unspecified.
+ */
+export const DEFAULT_MAX_COMPLETION_TOKENS = 32000;
+
 export function buildUpstreamBody(
   request: ChatRequest,
-  config: Config,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: request.model,
     messages: request.messages,
     // Requirement: upstream is ALWAYS streamed.
     stream: true,
+    // OpenCode always asks for the final usage chunk; matches its wire format.
+    stream_options: { include_usage: true },
   };
 
   for (const field of FORWARDABLE_FIELDS) {
@@ -78,19 +85,11 @@ export function buildUpstreamBody(
     if (value !== undefined && value !== null) body[field] = value;
   }
 
-  if (config.includeUsage) {
-    body.stream_options = { include_usage: true };
-  }
-
-  // OpenCode always sends a real max_completion_tokens (32000 by default).
-  // Add it when the caller left both token limits unspecified so the wire
-  // shape matches the official CLI.
   if (
-    config.defaultMaxCompletionTokens > 0 &&
     body.max_tokens === undefined &&
     body.max_completion_tokens === undefined
   ) {
-    body.max_completion_tokens = config.defaultMaxCompletionTokens;
+    body.max_completion_tokens = DEFAULT_MAX_COMPLETION_TOKENS;
   }
 
   // Some thinking-capable models expect `thinking`/`reasoning` blocks; pass
@@ -249,7 +248,7 @@ export class UpstreamClient {
 
   /** Fetch the public Zen model catalog (authenticated with the public key). */
   async fetchCatalog(signal?: AbortSignal): Promise<unknown> {
-    const headers = buildUpstreamHeaders(this.config, {
+    const headers = buildUpstreamHeaders({
       stream: false,
       identity: { requestId: generateRequestId() },
     });
@@ -283,11 +282,8 @@ export class UpstreamClient {
   ): AsyncGenerator<UpstreamEvent, void, unknown> {
     const url = `${this.config.upstreamBaseUrl}/chat/completions`;
     const identity = options.identity;
-    const headers = buildUpstreamHeaders(this.config, {
-      stream: true,
-      identity,
-    });
-    const body = buildUpstreamBody(request, this.config);
+    const headers = buildUpstreamHeaders({ stream: true, identity });
+    const body = buildUpstreamBody(request);
 
     let response: Response;
     try {

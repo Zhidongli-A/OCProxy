@@ -1,11 +1,10 @@
 /**
  * Free-model catalog.
  *
- * The Zen catalog (`/v1/models`) is the source of truth. Every entry carrying a
- * zero input AND output price is considered free; everything else is dropped
- * so paid models are never advertised or served. The catalog is fetched live
- * and cached; on failure the last successful in-memory snapshot is kept. No
- * model metadata is hardcoded in this project.
+ * The Zen catalog (`/v1/models`) is the source of truth and is always read
+ * live: nothing is cached and no model metadata is hardcoded. Every entry
+ * carrying a zero input AND output price is considered free; everything else
+ * is dropped so paid models are never advertised or served.
  */
 
 import type { Config, ModelInfo } from "./types.ts";
@@ -105,7 +104,7 @@ export function toModelInfo(raw: RawModel): ModelInfo | undefined {
 }
 
 export interface CatalogStatus {
-  source: "live" | "stale" | "unavailable";
+  source: "live" | "unavailable";
   models: number;
   updatedAt: number;
   lastError?: string;
@@ -116,175 +115,112 @@ export interface ModelRegistryOptions {
   upstream?: UpstreamClient;
   fetchImpl?: typeof fetch;
   now?: () => number;
-  /** Never touch the network; the catalog stays empty. */
-  offline?: boolean;
 }
 
+/**
+ * Live free-model catalog. Lookups always hit `/v1/models`; the last result is
+ * kept only to describe catalog status on `/health` and the dashboard.
+ */
 export class ModelRegistry {
-  readonly config: Config;
   readonly #upstream: UpstreamClient;
   readonly #now: () => number;
-  readonly #offline: boolean;
 
-  #models: ModelInfo[] = [];
-  #byId = new Map<string, ModelInfo>();
+  #snapshot: ModelInfo[] = [];
   #updatedAt = 0;
-  #fetchedOnce = false;
   #lastError: string | undefined;
   #inflight: Promise<ModelInfo[]> | undefined;
 
   constructor(options: ModelRegistryOptions) {
-    this.config = options.config;
     this.#upstream =
       options.upstream ??
       new UpstreamClient(options.config, options.fetchImpl ?? fetch);
     this.#now = options.now ?? Date.now;
-    this.#offline = options.offline ?? false;
   }
 
   get status(): CatalogStatus {
     return {
       source:
-        this.#models.length === 0
-          ? "unavailable"
-          : this.#lastError
-            ? "stale"
-            : "live",
-      models: this.#models.length,
+        this.#snapshot.length > 0 && !this.#lastError ? "live" : "unavailable",
+      models: this.#snapshot.length,
       updatedAt: this.#updatedAt,
       lastError: this.#lastError,
     };
   }
 
-  /** Return the cached free catalog, refreshing it when stale. */
-  async getModels(force = false): Promise<ModelInfo[]> {
-    const age = this.#now() - this.#updatedAt;
-    const ttl = this.#lastError
-      ? this.config.modelCacheErrorTtlMs
-      : this.config.modelCacheTtlMs;
-    if (!force && this.#fetchedOnce && age < ttl) {
-      return this.#applyOverrides(this.#models);
-    }
-
-    if (this.#inflight) return this.#applyOverrides(await this.#inflight);
-
-    this.#inflight = this.#refresh().finally(() => {
+  /**
+   * Fetch the free catalog from upstream. Concurrent callers share one
+   * in-flight request; nothing is reused after it settles.
+   */
+  async getModels(): Promise<ModelInfo[]> {
+    if (this.#inflight) return this.#inflight;
+    const pending = this.#fetch().finally(() => {
       this.#inflight = undefined;
     });
-    return this.#applyOverrides(await this.#inflight);
-  }
-
-  #applyOverrides(models: ModelInfo[]): ModelInfo[] {
-    if (Object.keys(this.config.contextLimitOverrides).length === 0) {
-      return models;
-    }
-    return models.map((model) => this.#applyOverride(model));
-  }
-
-  #applyOverride(model: ModelInfo): ModelInfo {
-    const override = this.config.contextLimitOverrides[model.id];
-    if (!override) return model;
-    return {
-      ...model,
-      contextLength: override.context ?? model.contextLength,
-      inputLength: override.input ?? model.inputLength,
-      maxOutputTokens: override.output ?? model.maxOutputTokens,
-    };
+    this.#inflight = pending;
+    return pending;
   }
 
   async getModel(id: string): Promise<ModelInfo | undefined> {
     const normalized = normalizeModelId(id);
     const models = await this.getModels();
-    const found = this.#byId.get(normalized);
-    if (found) return this.#applyOverride(found);
-    return models.find((model) => model.id.toLowerCase() === normalized.toLowerCase());
-  }
-
-  /**
-   * Resolve a downstream model name to a free catalog entry, applying provider
-   * prefix normalisation. Throws 503 when the live catalog is unavailable and
-   * 404 when the model is unknown or paid.
-   */
-  async resolve(model: string): Promise<ModelInfo> {
-    const normalized = normalizeModelId(model);
-    const found = await this.getModel(normalized);
-    if (found) return found;
-
-    const available = (await this.getModels()).map((entry) => entry.id);
-    if (available.length === 0) {
-      throw new HttpError(
-        503,
-        "Free model catalog is unavailable. Check network access to the upstream models endpoint.",
-        "catalog_unavailable",
-        "upstream_error",
-      );
-    }
-    throw modelNotFound(
-      `Model '${model}' is not a free OpenCode Zen model. ` +
-        `Available free models: ${available.join(", ")}`,
+    return models.find(
+      (model) => model.id.toLowerCase() === normalized.toLowerCase(),
     );
   }
 
-  async #refresh(): Promise<ModelInfo[]> {
-    if (this.#offline) {
-      this.#fetchedOnce = true;
-      this.#updatedAt = this.#now();
-      this.#lastError = undefined;
-      return this.#models;
-    }
+  /**
+   * Resolve a downstream model name to a live free catalog entry, applying
+   * provider prefix normalisation. Throws 503 when the catalog cannot be read
+   * and 404 when the model is unknown or paid.
+   */
+  async resolve(model: string): Promise<ModelInfo> {
+    const normalized = normalizeModelId(model).toLowerCase();
+    const models = await this.getModels();
+    const found = models.find(
+      (entry) => entry.id.toLowerCase() === normalized,
+    );
+    if (found) return found;
+
+    throw modelNotFound(
+      `Model '${model}' is not a free OpenCode Zen model. ` +
+        `Available free models: ${models.map((entry) => entry.id).join(", ")}`,
+    );
+  }
+
+  async #fetch(): Promise<ModelInfo[]> {
     try {
       const payload = await this.#upstream.fetchCatalog();
       const rawModels = extractRawModels(payload);
       if (rawModels.length === 0) {
         throw new Error("catalog response contained no models");
       }
-      const free = rawModels
-        .map((raw) => toModelInfo(raw))
-        .filter((model): model is ModelInfo => Boolean(model));
 
       // Preserve the order returned by the catalog, de-duplicated by id.
       const seen = new Set<string>();
-      const unique = free.filter((model) => {
-        if (seen.has(model.id)) return false;
+      const unique: ModelInfo[] = [];
+      for (const raw of rawModels) {
+        const model = toModelInfo(raw);
+        if (!model || seen.has(model.id)) continue;
         seen.add(model.id);
-        return true;
-      });
-
-      for (const extra of this.config.extraFreeModels) {
-        if (extra === "*" || seen.has(extra)) continue;
-        // Runtime allow-list entry: no metadata is hardcoded.
-        unique.push({
-          id: extra,
-          name: extra,
-          created: Math.floor(this.#now() / 1000),
-          ownedBy: "opencode",
-          capabilities: {
-            tools: true,
-            reasoning: true,
-            vision: false,
-            structuredOutput: false,
-          },
-          api: "chat-completions",
-          free: true,
-        });
-        seen.add(extra);
+        unique.push(model);
       }
-
       if (unique.length === 0) {
         throw new Error("catalog contained no free chat models");
       }
 
-      this.#models = unique;
-      this.#byId = new Map(unique.map((model) => [model.id, model]));
+      this.#snapshot = unique;
       this.#updatedAt = this.#now();
-      this.#fetchedOnce = true;
       this.#lastError = undefined;
       return unique;
     } catch (error) {
-      this.#lastError = (error as Error).message;
-      this.#fetchedOnce = true;
+      this.#lastError = error instanceof Error ? error.message : String(error);
       this.#updatedAt = this.#now();
-      return this.#models;
+      throw new HttpError(
+        503,
+        `Free model catalog is unavailable: ${this.#lastError}`,
+        "catalog_unavailable",
+        "upstream_error",
+      );
     }
   }
 }

@@ -24,7 +24,7 @@
 
 **上游链路**：OpenCode V2 身份（UA / session / project / trace）→ 最小 `<env>` 块 + 一个 `read` 工具 → 强制 `stream: true` → SSE 归一化 → 还原为下游原生格式
 
-**设计特色**：零运行时依赖 · 实时免费模型目录 · 不写死任何模型数据 · 工具名上游别名化并回包还原 · 429 换新会话重试 · 本地上下文守卫 · 多格式图片 / 思考 / 工具调用
+**设计特色**：零运行时依赖 · 实时免费模型目录（不缓存）· 不写死任何模型数据 · 请求头全自动计算 · 工具名上游别名化并回包还原 · 429 换新会话重试一次 · 本地估算 token · 多格式图片 / 思考 / 工具调用
 
 ## 文件目录
 
@@ -33,13 +33,13 @@ OCProxy/
 ├── src/
 │   ├── index.ts          入口 · 启动日志 · 优雅退出
 │   ├── server.ts         路由 · 模型解析 · 上下文守卫 · 429 重试
-│   ├── config.ts         环境变量配置
+│   ├── config.ts         运行时配置（监听 / 上游地址 / 代理 / 超时 / 日志）
 │   ├── types.ts          规范类型（ChatRequest / UpstreamEvent / Adapter …）
-│   ├── identity.ts       OpenCode V2 指纹 · 会话 ID · trace 头
-│   ├── environment.ts    project id 计算
+│   ├── identity.ts       OpenCode V2 指纹 · 会话 ID · trace 头（全自动）
+│   ├── environment.ts    project id 计算（当前工作目录）
 │   ├── harness.ts        最小 <env> / read 注入 · 工具别名与还原
 │   ├── upstream.ts       上游请求 · 强制流式 · SSE 解析
-│   ├── models.ts         免费模型目录 · 缓存 · 过滤
+│   ├── models.ts         免费模型目录 · 实时拉取 · 免费过滤
 │   ├── sse.ts            SSE 解析 / 编码
 │   ├── collect.ts        流事件聚合
 │   └── adapters/
@@ -71,7 +71,7 @@ cd E:\ZenFreeProxy
 npm install -g .
 
 # 从 GitHub Release 的 tarball
-npm install -g https://github.com/Zhidongli-A/OCProxy/releases/download/v1.0.0/ocproxy-1.0.0.tgz
+npm install -g https://github.com/Zhidongli-A/OCProxy/releases/download/v1.0.1/ocproxy-1.0.1.tgz
 
 # 直接从 GitHub 仓库安装（无需 npm 发布）
 npm install -g github:Zhidongli-A/OCProxy
@@ -107,12 +107,6 @@ ocproxy                # 默认 http://127.0.0.1:8787
 ```bash
 curl http://127.0.0.1:8787/health
 # {"status":"ok","service":"OCProxy",...}
-```
-
-完全离线模式（不请求上游，用于测试客户端）：
-
-```bash
-UPSTREAM_DRY_RUN=1 ocproxy
 ```
 
 ### 三、下游接口
@@ -161,33 +155,25 @@ providers:
 
 ### 五、配置
 
-复制 `.env.example` 为 `.env`，或直接设置环境变量。
+复制 `.env.example` 为 `.env`，或直接设置环境变量。**只有下面几项可配**：
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `HOST` / `PORT` | `0.0.0.0` / `8787` | 监听地址 |
 | `UPSTREAM_BASE_URL` | `https://opencode.ai/inference/openai/v1` | 上游 OpenAI 兼容入口 |
-| `UPSTREAM_MODELS_URL` | `https://opencode.ai/inference/v1/models` | 模型目录 |
-| `UPSTREAM_API_KEY` | `public` | 共享匿名密钥 |
+| `UPSTREAM_MODELS_URL` | `https://opencode.ai/inference/v1/models` | 免费模型目录 |
 | `UPSTREAM_PROXY` | 空 | 可选 HTTP CONNECT 代理，如 `http://127.0.0.1:7890`；支持 `user:pass@` |
-| `OPENCODE_VERSION` | `2.2.6` | 伪装的 OpenCode 版本，UA 自动拼成 `opencode/latest/<v>/cli` |
-| `OPENCODE_USER_AGENT` | `opencode/latest/2.2.6/cli` | 直接覆盖 UA（一般不用改） |
-| `OPENCODE_CLIENT` | `cli` | `x-opencode-client` |
-| `OPENCODE_PROJECT_ID` | 空 | 覆盖 `sha1("directory:<dir>")`；空则自动计算 |
-| `OPENCODE_WORKING_DIRECTORY` | 当前工作目录 | project id 与最小 `<env>` 块的目录 |
-| `CONTEXT_GUARD` | `true` | 本地估算 token，超模型窗口直接 400，不耗配额 |
-| `RETRY_ON_429` | `true` | 上游 429 时换新 session 重试一次（不循环） |
-| `CONTEXT_LIMIT_OVERRIDES` | 空 | JSON，按模型 id 覆盖目录里的 context/input/output |
-| `OPENCODE_MAX_COMPLETION_TOKENS` | `32000` | 调用方未指定 token 上限时补上的值 |
-| `FREE_MODELS_ONLY` | `true` | 拒绝非免费模型 |
-| `UPSTREAM_INCLUDE_USAGE` | `true` | 请求 `stream_options.include_usage` |
-| `MODEL_CACHE_TTL_MS` | `600000` | 目录缓存时间 |
-| `REQUEST_TIMEOUT_MS` | `300000` | 上游超时 |
-| `SESSION_AFFINITY` | `auto` | 优先复用真实下游 OpenCode 会话 ID，否则按对话派生 |
+| `REQUEST_TIMEOUT_MS` | `300000` | 上游超时（毫秒） |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 
-> [!TIP]
-> 仓库不内置任何实际模型数据。目录完全来自上游 `/v1/models`；需要按实测值修正上下文时，用 `CONTEXT_LIMIT_OVERRIDES` 在运行时覆盖。
+> [!IMPORTANT]
+> 以下行为内置且不可配置，没有对应环境变量：
+>
+> - **请求头**：`User-Agent`、`x-opencode-client`、`x-opencode-project`、session id、`b3` / `traceparent` 全部自动计算；project id 与 `<env>` 目录取自进程工作目录，用户无法改动。
+> - **免费过滤**：只服务 `cost` 为零的模型，付费模型在调用上游前直接 `404`。
+> - **本地 token 估算**：请求前本地估算输入 token，超出模型窗口立即 `400`，不消耗免费额度。
+> - **429 重试**：上游返回 429 时换全新 session 重试一次，不循环。
+> - **模型目录**：每次查询实时请求 `/v1/models`，不缓存、不内置任何兜底模型。
 
 ### 六、工具与图片
 
@@ -198,10 +184,10 @@ providers:
 
 ### 七、模型目录
 
-`ModelRegistry` 实时拉取上游目录，保留 `cost.text.input.price === 0 && cost.text.output.price === 0` 且可经 Chat Completions 转发的模型；缓存 10 分钟，失败时保留上次成功的**内存快照**。
+`ModelRegistry` 对每次查询都实时拉取上游目录，只保留 `cost.text.input.price === 0 && cost.text.output.price === 0` 且可经 Chat Completions 转发的模型。**不做任何缓存**：并发请求会合并成一次拉取，但结果不保留给后续请求。
 
 - 不内置兜底模型列表；
-- 首次获取失败时目录为空，推理返回 `503 catalog_unavailable`；
+- 拉取失败时目录不可用，`/v1/models` 与推理返回 `503 catalog_unavailable`；
 - 付费模型在调用上游前直接返回 `404 model_not_found`。
 
 ## 工作原理
@@ -224,7 +210,7 @@ providers:
 ## 限制与排障
 
 - **429 语义歧义**：配额耗尽与门控拒绝返回同一段 `429 FreeUsageLimitError`。先确认出口 IP 干净：同一 IP 上官方 `opencode` CLI 若也 429，则与本项目无关（换 IP 或等 UTC 0 点）。
-- **会话烧毁**：某个 `ses_` 被 429 后可能持续 429；relay 会丢弃该对话的 session 映射，并用全新 session 重试一次（`RETRY_ON_429`）。
+- **会话烧毁**：某个 `ses_` 被 429 后可能持续 429；relay 会自动丢弃该对话的 session 映射，并用全新 session 重试一次（内置行为，不可关闭）。
 - **出口 IP**：免费额度按 IP 计桶；不要在干净 IP 上反复探测，长上下文会更快消耗额度。
 - **公开代理**：基本不可用；机房/共享 IP 通常已被耗尽或风控。需要稳定访问请使用住宅网络或可信代理。
 - **DSH / 客户端集成**：若客户端报工具名错误，检查是否经过旧版 relay；新版本会自动别名化与还原。
@@ -251,7 +237,7 @@ bun run typecheck
 
 ```bash
 npm pack --dry-run        # 检查内容
-npm pack                  # 生成 ocproxy-1.0.0.tgz
+npm pack                  # 生成 ocproxy-1.0.1.tgz
 npm publish --access public
 ```
 
