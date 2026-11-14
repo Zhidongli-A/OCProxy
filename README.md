@@ -63,35 +63,13 @@ OCProxy/
 
 ### 一、安装
 
-运行时只依赖 Bun；安装包本身零运行依赖。
+运行时只依赖 Bun；安装包本身零运行依赖。直接从 GitHub 仓库安装：
 
 ```bash
-# 从源码
-cd E:\ZenFreeProxy
-npm install -g .
-
-# 从 GitHub Release 的 tarball
-npm install -g https://github.com/Zhidongli-A/OCProxy/releases/download/v1.0.1/ocproxy-1.0.1.tgz
-
-# 直接从 GitHub 仓库安装（无需 npm 发布）
 npm install -g github:Zhidongli-A/OCProxy
-
-# 已发布到 npm 后
-npm install -g ocproxy
-
-# 用 Bun
-bun add -g .
-bunx ocproxy
 ```
 
 安装后命令为 `ocproxy`；Windows 下 `OCProxy` 同样可用（大小写不敏感）。
-
-作为项目依赖安装（不全局）：
-
-```bash
-npm install <tarball-url-or-github:owner/repo>
-npx ocproxy
-```
 
 ### 二、启动
 
