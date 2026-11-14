@@ -52,7 +52,6 @@ OCProxy/
 │   └── read-tool.json    官方 OpenCode `read` 工具定义（门控要求）
 ├── bin/
 │   └── ocproxy.mjs       npm / 全局命令启动器（调用 Bun）
-├── .github/workflows/    GitHub Release 与 npm 发布工作流
 ├── .env.example
 ├── LICENSE
 ├── package.json
